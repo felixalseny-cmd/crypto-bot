@@ -1,0 +1,350 @@
+require('dotenv').config();
+const express = require('express');
+const TelegramBot = require('node-telegram-bot-api');
+const mongoose = require('mongoose');
+const path = require('path');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// ==================== 🔍 ПРОВЕРКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ====================
+console.log('🔧 Starting application...');
+console.log('📋 Checking environment variables...');
+
+const requiredEnvVars = ['BOT_TOKEN', 'MONGODB_URI', 'VIP_CHANNEL_ID', 'WALLET_ADDRESS'];
+let missingVars = [];
+
+requiredEnvVars.forEach(varName => {
+  if (!process.env[varName]) {
+    console.error(`❌ Missing required environment variable: ${varName}`);
+    missingVars.push(varName);
+  } else {
+    console.log(`✅ ${varName}: ${varName === 'BOT_TOKEN' ? '***' + process.env[varName].slice(-4) : process.env[varName]}`);
+  }
+});
+
+if (missingVars.length > 0) {
+  console.error('🚨 Application cannot start without required environment variables');
+  process.exit(1);
+}
+
+console.log('✅ All environment variables are present');
+
+// ==================== 🗄️ ПОДКЛЮЧЕНИЕ К MONGODB ====================
+console.log('🔗 Connecting to MongoDB...');
+
+const MONGODB_URI = process.env.MONGODB_URI;
+
+mongoose.connect(MONGODB_URI)
+  .then(() => {
+    console.log('✅ Connected to MongoDB');
+  })
+  .catch(err => {
+    console.error('❌ MongoDB connection error:', err.message);
+    process.exit(1);
+  });
+
+// ==================== 👤 МОДЕЛЬ ПОЛЬЗОВАТЕЛЯ ====================
+const userSchema = new mongoose.Schema({
+  userId: { type: Number, required: true, unique: true },
+  username: String,
+  firstName: String,
+  subscription: {
+    type: String,
+    enum: ['none', '1month', '3months'],
+    default: 'none'
+  },
+  expiresAt: Date,
+  joinedAt: { type: Date, default: Date.now },
+  transactions: [{
+    hash: String,
+    amount: Number,
+    status: { type: String, default: 'pending' },
+    timestamp: { type: Date, default: Date.now }
+  }],
+  pendingPayment: {
+    plan: String,
+    amount: Number,
+    timestamp: Date
+  }
+});
+
+const User = mongoose.model('User', userSchema);
+
+// ==================== 🤖 ИНИЦИАЛИЗАЦИЯ TELEGRAM БОТА ====================
+console.log('🤖 Initializing Telegram Bot...');
+
+const bot = new TelegramBot(process.env.BOT_TOKEN, { 
+  polling: true,
+  request: {
+    agentOptions: {
+      keepAlive: true,
+      family: 4
+    }
+  }
+});
+
+// Проверка что бот работает
+bot.getMe().then(botInfo => {
+  console.log(`✅ Telegram Bot started: @${botInfo.username}`);
+}).catch(err => {
+  console.error('❌ Telegram Bot initialization failed:', err.message);
+  process.exit(1);
+});
+
+// ==================== 🎯 КОМАНДА /START ====================
+bot.onText(/\/start/, async (msg) => {
+  const chatId = msg.chat.id;
+  console.log(`👤 User ${chatId} started bot`);
+
+  try {
+    const user = await User.findOneAndUpdate(
+      { userId: chatId },
+      {
+        userId: chatId,
+        username: msg.chat.username,
+        firstName: msg.chat.first_name
+      },
+      { upsert: true, new: true }
+    );
+
+    const welcomeMessage = `🚀 Welcome to FXWave VIP Access, ${msg.chat.first_name}!\n\nChoose your subscription plan:`;
+
+    const options = {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '📅 1 Month - 24 USDT', callback_data: 'subscribe_1month' },
+            { text: '⭐ 3 Months - 55 USDT', callback_data: 'subscribe_3months' }
+          ],
+          [
+            { text: 'ℹ️ My Subscription', callback_data: 'my_subscription' },
+            { text: '💳 How to Pay', callback_data: 'how_to_pay' }
+          ]
+        ]
+      }
+    };
+
+    await bot.sendMessage(chatId, welcomeMessage, options);
+    console.log(`📨 Sent welcome message to user ${chatId}`);
+  } catch (error) {
+    console.error('Error in /start command:', error);
+    await bot.sendMessage(chatId, '❌ An error occurred. Please try again.');
+  }
+});
+
+// ==================== 🔘 ОБРАБОТКА CALLBACK КНОПОК ====================
+bot.on('callback_query', async (callbackQuery) => {
+  const message = callbackQuery.message;
+  const data = callbackQuery.data;
+  const chatId = message.chat.id;
+
+  console.log(`🔘 User ${chatId} pressed button: ${data}`);
+
+  try {
+    if (data.startsWith('subscribe_')) {
+      const plan = data.split('_')[1];
+      await sendPaymentInstructions(chatId, plan);
+    } else if (data === 'my_subscription') {
+      await showUserSubscription(chatId);
+    } else if (data === 'how_to_pay') {
+      await sendHowToPay(chatId);
+    } else if (data === 'back_to_plans') {
+      // Имитируем команду /start для возврата к планам
+      await bot.deleteMessage(chatId, message.message_id);
+      bot.emitText(chatId, '/start');
+    }
+  } catch (error) {
+    console.error('Error handling callback:', error);
+    await bot.sendMessage(chatId, '❌ An error occurred. Please try again.');
+  }
+});
+
+// ==================== 💳 ФУНКЦИЯ ОТПРАВКИ ИНСТРУКЦИЙ ПО ОПЛАТЕ ====================
+async function sendPaymentInstructions(chatId, plan) {
+  const prices = { '1month': 24, '3months': 55 };
+  const amount = prices[plan];
+  const walletAddress = process.env.WALLET_ADDRESS;
+
+  const message = `💳 *Payment Instructions for ${plan.toUpperCase()}*\n\n📍 Send exactly *${amount} USDT* (TRC20) to:\n\`${walletAddress}\`\n\n⚠️ *Important:*\n• Send only USDT (TRC20)\n• Send exact amount: *${amount} USDT*\n• Network: *TRON (TRC20)*\n• After payment, forward the transaction hash to this bot\n\nOnce verified, you'll get VIP access automatically!`;
+
+  await bot.sendMessage(chatId, message, { 
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📋 Copy Wallet Address', callback_data: 'copy_wallet' }],
+        [{ text: '🔙 Back to Plans', callback_data: 'back_to_plans' }]
+      ]
+    }
+  });
+
+  // Сохраняем ожидаемую транзакцию
+  await User.findOneAndUpdate(
+    { userId: chatId },
+    { 
+      $set: { 
+        pendingPayment: { plan, amount, timestamp: new Date() }
+      }
+    }
+  );
+
+  console.log(`💰 Sent payment instructions to user ${chatId} for plan: ${plan}`);
+}
+
+// ==================== 📊 ПОКАЗАТЬ ИНФОРМАЦИЮ О ПОДПИСКЕ ====================
+async function showUserSubscription(chatId) {
+  const user = await User.findOne({ userId: chatId });
+  
+  if (!user || user.subscription === 'none') {
+    await bot.sendMessage(chatId, 
+      `📊 *Your Subscription Status*\n\n❌ No active subscription\nChoose a plan to get VIP access!`,
+      { 
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🎫 View Plans', callback_data: 'back_to_plans' }]
+          ]
+        }
+      }
+    );
+    return;
+  }
+
+  const remainingTime = Math.ceil((user.expiresAt - new Date()) / (1000 * 60 * 60 * 24));
+  
+  await bot.sendMessage(chatId,
+    `📊 *Your Subscription Status*\n\n✅ Plan: *${user.subscription.toUpperCase()}*\n⏰ Expires in: *${remainingTime} days*\n📅 Renewal: *${user.expiresAt.toLocaleDateString()}*`,
+    { 
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔄 Renew Subscription', callback_data: 'back_to_plans' }]
+        ]
+      }
+    }
+  );
+
+  console.log(`📊 Sent subscription info to user ${chatId}`);
+}
+
+// ==================== 💡 ИНСТРУКЦИЯ КАК ОПЛАТИТЬ ====================
+async function sendHowToPay(chatId) {
+  const message = `💡 *How to Pay with USDT*\n\n1. Open your crypto wallet (Trust Wallet, Binance, etc.)\n2. Select USDT and make sure to choose *TRON (TRC20)* network\n3. Send exact amount from the subscription plan\n4. Copy the *Transaction Hash (TXID)* after sending\n5. Forward the transaction hash to this bot\n\n⏳ Verification usually takes 5-15 minutes`;
+
+  await bot.sendMessage(chatId, message, { 
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🎫 View Subscription Plans', callback_data: 'back_to_plans' }]
+      ]
+    }
+  });
+
+  console.log(`💡 Sent payment instructions to user ${chatId}`);
+}
+
+// ==================== 📨 ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ (ДЛЯ ТРАНЗАКЦИЙ) ====================
+bot.on('message', async (msg) => {
+  // Пропускаем команды
+  if (msg.text && msg.text.startsWith('/')) return;
+  
+  const chatId = msg.chat.id;
+  
+  // Если сообщение похоже на хэш транзакции (64 символа, hex)
+  if (msg.text && msg.text.length === 64 && /^[a-fA-F0-9]+$/.test(msg.text)) {
+    console.log(`🔍 Received transaction hash from user ${chatId}: ${msg.text.substring(0, 12)}...`);
+    
+    await bot.sendMessage(chatId, 
+      `⏳ Transaction received! Verifying hash: ${msg.text.substring(0, 12)}...\n\nThis may take a few minutes. We'll notify you once verified.`,
+      { parse_mode: 'Markdown' }
+    );
+    
+    // Здесь будет реальная логика проверки транзакции
+    // Пока просто имитируем успешную проверку через 10 секунд
+    setTimeout(async () => {
+      try {
+        // Находим пользователя и активируем подписку
+        const user = await User.findOne({ userId: chatId });
+        if (user && user.pendingPayment) {
+          const { plan } = user.pendingPayment;
+          const expiresAt = new Date();
+          expiresAt.setMonth(expiresAt.getMonth() + (plan === '1month' ? 1 : 3));
+          
+          await User.findOneAndUpdate(
+            { userId: chatId },
+            {
+              subscription: plan,
+              expiresAt,
+              $unset: { pendingPayment: 1 },
+              $push: {
+                transactions: {
+                  hash: msg.text,
+                  amount: user.pendingPayment.amount,
+                  status: 'completed',
+                  timestamp: new Date()
+                }
+              }
+            }
+          );
+
+          await bot.sendMessage(chatId,
+            `✅ *Payment Verified!*\n\nYour ${plan} VIP subscription has been activated! You now have access to premium signals.`,
+            { parse_mode: 'Markdown' }
+          );
+
+          console.log(`✅ Activated ${plan} subscription for user ${chatId}`);
+        }
+      } catch (error) {
+        console.error('Error activating subscription:', error);
+        await bot.sendMessage(chatId, '❌ Error activating subscription. Please contact support.');
+      }
+    }, 10000);
+  }
+});
+
+// ==================== 🌐 НАСТРОЙКА Express.js ДЛЯ WEB-ИНТЕРФЕЙСА ====================
+
+// Middleware
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Маршрут для веб-страницы
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Health check route для Render
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    service: 'FXWave Crypto Bot'
+  });
+});
+
+// ==================== 🚀 ЗАПУСК СЕРВЕРА ====================
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🌐 Web interface: http://localhost:${PORT}`);
+  console.log(`❤️  Health check: http://localhost:${PORT}/health`);
+  console.log('=========================================');
+  console.log('✅ Application started successfully!');
+  console.log('=========================================');
+});
+
+// ==================== 🔄 ОБРАБОТКА ОШИБОК И ГРАЦИОЗНОЕ ЗАВЕРШЕНИЕ ====================
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  process.exit(1);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('🛑 SIGTERM received, shutting down gracefully');
+  process.exit(0);
+});
