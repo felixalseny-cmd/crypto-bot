@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 const path = require('path');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000; // Render использует PORT
 
 // ==================== 🔧 ПРОВЕРКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ====================
 console.log('🚀 Starting FXWave Crypto Bot...');
@@ -73,7 +73,7 @@ const initializeBot = () => {
   bot = new TelegramBot(process.env.BOT_TOKEN, { webhook: true });
   
   const webhookUrl = `https://${process.env.RENDER_EXTERNAL_URL}/bot${process.env.BOT_TOKEN}`;
-  bot.setWebHook(webhookUrl).then(() => {
+  bot.setWebhook(webhookUrl).then(() => {
     console.log(`✅ Webhook set to: ${webhookUrl}`);
     bot.getMe().then(botInfo => {
       console.log(`✅ Telegram Bot started: @${botInfo.username}`);
@@ -331,14 +331,14 @@ function setupBotHandlers() {
       await bot.sendMessage(chatId, `❌ <b>Test error:</b> ${error.message}`, { parse_mode: 'HTML' });
     }
   });
+
+  // ==================== 🌐 WEBHOOK CALLBACK ====================
+  app.use(bot.webhookCallback(`/bot${process.env.BOT_TOKEN}`));
 }
 
-// ==================== 🌐 WEBHOOK И WEB ИНТЕРФЕЙС ====================
+// ==================== 🌐 WEB ИНТЕРФЕЙС ====================
 app.use(express.json());
 app.use(express.static('public'));
-
-// Обработка входящих обновлений от Telegram
-app.use(bot.webhookCallback(`/bot${process.env.BOT_TOKEN}`));
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
