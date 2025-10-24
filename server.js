@@ -309,4 +309,56 @@ function setupBotHandlers() {
 
       const admins = await bot.getChatAdministrators(process.env.VIP_CHANNEL_ID);
       const botInfo = await bot.getMe();
-      const isBotAdmin = admins.some(admin => admin.user.id === botInfo.id &&
+      const isBotAdmin = admins.some(admin => admin.user.id === botInfo.id && admin.can_invite_users);
+
+      if (isBotAdmin) {
+        await bot.sendMessage(chatId, `✅ <b>Bot is administrator</b> with invite rights.`, { parse_mode: 'HTML' });
+      } else {
+        await bot.sendMessage(chatId, `❌ <b>Bot is NOT administrator</b> or missing "Add members" permission.`, { parse_mode: 'HTML' });
+      }
+
+      const added = await addToVipChannel(chatId);
+      if (added) {
+        await bot.sendMessage(chatId, `✅ <b>Test: successfully added to VIP channel.</b>`, { parse_mode: 'HTML' });
+      } else {
+        await bot.sendMessage(chatId, `❌ <b>Test: failed to add to VIP channel.</b>`, { parse_mode: 'HTML' });
+      }
+    } catch (error) {
+      console.error('Test channel error:', error);
+      await bot.sendMessage(chatId, `❌ <b>Test error:</b> ${error.message}`, { parse_mode: 'HTML' });
+    }
+  });
+}
+
+// ==================== 🌐 WEB ИНТЕРФЕЙС ====================
+app.use(express.json());
+app.use(express.static('public'));
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/health', (req, res) => {
+  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+  res.json({
+    status: 'OK',
+    database: dbStatus,
+    service: 'FXWave Crypto Bot',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ==================== 🚀 ЗАПУСК СЕРВЕРА ====================
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log('✅ FXWave Crypto Bot is ready!');
+});
+
+// ==================== 🔄 ОБРАБОТКА ОШИБОК ====================
+process.on('unhandledRejection', (reason) => {
+  console.error('❌ Unhandled Rejection:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+});
