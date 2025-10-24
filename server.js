@@ -70,13 +70,20 @@ let bot;
 
 const initializeBot = () => {
   console.log('🤖 Initializing Telegram Bot...');
-  bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
-
-  bot.getMe().then(botInfo => {
-    console.log(`✅ Telegram Bot started: @${botInfo.username}`);
-    setupBotHandlers();
+  bot = new TelegramBot(process.env.BOT_TOKEN, { webhook: true });
+  
+  const webhookUrl = `https://${process.env.RENDER_EXTERNAL_URL}/bot${process.env.BOT_TOKEN}`;
+  bot.setWebHook(webhookUrl).then(() => {
+    console.log(`✅ Webhook set to: ${webhookUrl}`);
+    bot.getMe().then(botInfo => {
+      console.log(`✅ Telegram Bot started: @${botInfo.username}`);
+      setupBotHandlers();
+    }).catch(err => {
+      console.error('❌ Telegram Bot failed:', err);
+      setTimeout(initializeBot, 10000);
+    });
   }).catch(err => {
-    console.error('❌ Telegram Bot failed:', err);
+    console.error('❌ Failed to set webhook:', err);
     setTimeout(initializeBot, 10000);
   });
 };
@@ -128,11 +135,7 @@ function setupBotHandlers() {
     const chatId = msg.chat.id;
     await User.findOneAndUpdate(
       { userId: chatId },
-      {
-        userId: chatId,
-        username: msg.chat.username,
-        firstName: msg.chat.first_name
-      },
+      { userId: chatId, username: msg.chat.username, firstName: msg.chat.first_name },
       { upsert: true }
     );
     await sendStartMessage(chatId, msg.chat.first_name);
@@ -330,9 +333,12 @@ function setupBotHandlers() {
   });
 }
 
-// ==================== 🌐 WEB ИНТЕРФЕЙС ====================
+// ==================== 🌐 WEBHOOK И WEB ИНТЕРФЕЙС ====================
 app.use(express.json());
 app.use(express.static('public'));
+
+// Обработка входящих обновлений от Telegram
+app.use(bot.webhookCallback(`/bot${process.env.BOT_TOKEN}`));
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -349,7 +355,7 @@ app.get('/health', (req, res) => {
 });
 
 // ==================== 🚀 ЗАПУСК СЕРВЕРА ====================
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log('✅ FXWave Crypto Bot is ready!');
 });
