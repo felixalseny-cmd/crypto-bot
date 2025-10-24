@@ -256,4 +256,30 @@ process.on('unhandledRejection', (reason) => {
 });
 process.on('uncaughtException', (error) => {
   console.error('❌ Uncaught Exception:', error);
+  
+  // Удаление по истечении срока (раз в час)
+setInterval(async () => {
+  const expired = await User.find({
+    expiresAt: { $lt: new Date() },
+    subscription: { $ne: 'none' }
+  });
+
+  for (const user of expired) {
+    try {
+      // Удаляем из канала (работает всегда, если бот — админ)
+      await bot.banChatMember(process.env.VIP_CHANNEL_ID, user.userId);
+      await bot.unbanChatMember(process.env.VIP_CHANNEL_ID, user.userId);
+      
+      // Сбрасываем подписку
+      user.subscription = 'none';
+      await user.save();
+
+      // Уведомляем
+      await bot.sendMessage(user.userId, "❌ Your VIP subscription has expired.");
+    } catch (e) {
+      console.log("Failed to remove user", user.userId);
+    }
+  }
+}, 60 * 60 * 1000); // каждые 60 минут
+
 });
