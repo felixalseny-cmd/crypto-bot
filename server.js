@@ -243,7 +243,7 @@ function setupBotHandlers() {
           [{ text: '🎫 View Subscription Plans', callback_data: 'back_to_plans' }]
         ]
       }
-    );
+    });
   }
 
   bot.on('message', async (msg) => {
