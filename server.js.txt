@@ -1,0 +1,575 @@
+require('dotenv').config();
+const express = require('express');
+const TelegramBot = require('node-telegram-bot-api');
+const mongoose = require('mongoose');
+const path = require('path');
+const cron = require('cron');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// ==================== ПРОВЕРКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ====================
+console.log('🚀 Starting FXWave Crypto Bot...');
+
+const requiredEnvVars = ['BOT_TOKEN', 'MONGODB_URI', 'VIP_CHANNEL_ID', 'WALLET_ADDRESS'];
+requiredEnvVars.forEach(varName => {
+  if (!process.env[varName]) {
+    console.error(`❌ Missing environment variable: ${varName}`);
+    process.exit(1);
+  }
+  console.log(`✅ ${varName}: ${varName === 'BOT_TOKEN' ? '***' + process.env[varName].slice(-4) : 'Set'}`);
+});
+
+console.log('✅ All environment variables loaded');
+
+// ==================== ПОДКЛЮЧЕНИЕ К MONGODB ====================
+console.log('🔗 Connecting to MongoDB...');
+
+const connectDB = async () => {
+  try {
+    await mongoose.connect(process.env.MONGODB_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+    });
+    console.log('✅ Successfully connected to MongoDB');
+  } catch (error) {
+    console.error('❌ MongoDB connection failed:', error.message);
+    console.log('🔄 Retrying connection in 10 seconds...');
+    setTimeout(connectDB, 10000);
+  }
+};
+
+mongoose.connection.on('disconnected', () => {
+  console.log('⚠️ MongoDB disconnected, attempting to reconnect...');
+});
+
+mongoose.connection.on('error', (err) => {
+  console.error('❌ MongoDB connection error:', err);
+});
+
+connectDB();
+
+// ==================== МОДЕЛЬ ПОЛЬЗОВАТЕЛЯ ====================
+const userSchema = new mongoose.Schema({
+  userId: { type: Number, required: true, unique: true },
+  username: String,
+  firstName: String,
+  subscription: {
+    type: String,
+    enum: ['none', '1month', '3months'],
+    default: 'none'
+  },
+  expiresAt: Date,
+  joinedAt: { type: Date, default: Date.now },
+  transactions: [{
+    hash: String,
+    amount: Number,
+    status: { type: String, default: 'pending' },
+    timestamp: { type: Date, default: Date.now }
+  }],
+  pendingPayment: {
+    plan: String,
+    amount: Number,
+    timestamp: Date
+  },
+  inVipChannel: { type: Boolean, default: false }
+});
+
+const User = mongoose.model('User', userSchema);
+
+// ==================== ИНИЦИАЛИЗАЦИЯ TELEGRAM БОТА ====================
+let bot;
+
+const initializeBot = () => {
+  console.log('🤖 Initializing Telegram Bot...');
+  bot = new TelegramBot(process.env.BOT_TOKEN, { 
+    polling: true,
+    request: {
+      agentOptions: {
+        keepAlive: true,
+        family: 4
+      }
+    }
+  });
+
+  bot.getMe().then(botInfo => {
+    console.log(`✅ Telegram Bot started: @${botInfo.username}`);
+    
+    // ==================== КОМАНДА /START ====================
+    bot.onText(/\/start/, async (msg) => {
+      const chatId = msg.chat.id;
+      
+      if (mongoose.connection.readyState !== 1) {
+        await bot.sendMessage(chatId, '⚠️ Database is connecting, please try again in a moment...');
+        return;
+      }
+      
+      await User.findOneAndUpdate(
+        { userId: chatId },
+        {
+          userId: chatId,
+          username: msg.chat.username,
+          firstName: msg.chat.first_name
+        },
+        { upsert: true }
+      );
+
+      const welcomeMessage = `🚀 <b>Welcome to FXWave VIP Access, ${msg.chat.first_name}!</b>\n\nChoose your subscription plan:`;
+
+      const options = {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '📅 1 Month - 24 USDT', callback_data: 'subscribe_1month' },
+              { text: '⭐ 3 Months - 55 USDT', callback_data: 'subscribe_3months' }
+            ],
+            [
+              { text: 'ℹ️ My Subscription', callback_data: 'my_subscription' },
+              { text: '💳 How to Pay', callback_data: 'how_to_pay' }
+            ]
+          ]
+        }
+      };
+
+      await bot.sendMessage(chatId, welcomeMessage, options);
+    });
+
+    // ==================== КОМАНДА /TESTCHANNEL ====================
+    bot.onText(/\/testchannel/, async (msg) => {
+      const chatId = msg.chat.id;
+      
+      try {
+        const chat = await bot.getChat(process.env.VIP_CHANNEL_ID);
+        await bot.sendMessage(chatId, `✅ <b>Channel Found:</b> ${chat.title}\n<b>ID:</b> <code>${chat.id}</code>`, { parse_mode: 'HTML' });
+        
+        const admins = await bot.getChatAdministrators(process.env.VIP_CHANNEL_ID);
+        const botInfo = await bot.getMe();
+        const botAdmin = admins.find(admin => admin.user.id === botInfo.id);
+        
+        if (botAdmin) {
+          await bot.sendMessage(chatId, '✅ <b>Bot is administrator with permissions:</b>\n• Add Users\n• Ban Users\n• Invite Users', { parse_mode: 'HTML' });
+        } else {
+          await bot.sendMessage(chatId, '❌ <b>Bot is NOT administrator</b>', { parse_mode: 'HTML' });
+        }
+        
+        const testAdd = await addToVipChannel(chatId, '1month');
+        if (testAdd) {
+          await bot.sendMessage(chatId, '✅ <b>Test addition successful!</b>', { parse_mode: 'HTML' });
+        } else {
+          await bot.sendMessage(chatId, '❌ <b>Test addition failed</b>', { parse_mode: 'HTML' });
+        }
+        
+      } catch (error) {
+        await bot.sendMessage(chatId, `❌ <b>Test error:</b> ${error.message}`, { parse_mode: 'HTML' });
+      }
+    });
+
+  }).catch(err => {
+    console.error('❌ Telegram Bot failed:', err);
+    setTimeout(initializeBot, 10000);
+  });
+};
+
+// ==================== УЛУЧШЕННАЯ ФУНКЦИЯ ДОБАВЛЕНИЯ В VIP КАНАЛ ====================
+async function addToVipChannel(chatId, plan) {
+  try {
+    console.log(`🔄 Adding user ${chatId} to VIP channel: ${process.env.VIP_CHANNEL_ID}`);
+    
+    // Основной метод: прямое добавление
+    await bot.addChatMember(process.env.VIP_CHANNEL_ID, chatId);
+    
+    console.log(`✅ Successfully added user ${chatId} to VIP channel`);
+    
+    await User.findOneAndUpdate(
+      { userId: chatId },
+      { 
+        inVipChannel: true,
+        subscription: plan
+      }
+    );
+    
+    return true;
+  } catch (error) {
+    console.error(`❌ Failed to add user ${chatId} to VIP channel:`, error.message);
+    
+    if (error.response && error.response.body) {
+      const errorCode = error.response.body.error_code;
+      const description = error.response.body.description;
+      
+      console.error(`📋 Error details - Code: ${errorCode}, Description: ${description}`);
+      
+      if (description && description.includes('USER_ALREADY_PARTICIPANT')) {
+        console.log(`ℹ️ User ${chatId} is already in VIP channel`);
+        await User.findOneAndUpdate(
+          { userId: chatId },
+          { 
+            inVipChannel: true,
+            subscription: plan
+          }
+        );
+        return true;
+      }
+      
+      if (description && description.includes('CHAT_ADMIN_REQUIRED')) {
+        console.error(`❌ Bot is not admin in the channel or missing permissions`);
+        return false;
+      }
+    }
+    
+    // Если прямой метод не работает, пробуем через пригласительную ссылку
+    console.log(`🔄 Trying invite link method for user ${chatId}`);
+    return await addToVipChannelWithLink(chatId, plan);
+  }
+}
+
+// ==================== АЛЬТЕРНАТИВНЫЙ МЕТОД: ПРИГЛАСИТЕЛЬНАЯ ССЫЛКА ====================
+async function addToVipChannelWithLink(chatId, plan) {
+  try {
+    console.log(`🔗 Using invite link method for user ${chatId}`);
+    
+    const inviteLink = await bot.exportChatInviteLink(process.env.VIP_CHANNEL_ID);
+    
+    await bot.sendMessage(chatId,
+      `✅ <b>Your subscription has been activated!</b>\n\n` +
+      `To access the VIP channel, click the link below:\n\n` +
+      `<code>${inviteLink}</code>\n\n` +
+      `This link is valid for 24 hours.`,
+      { 
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🎯 Join VIP Channel', url: inviteLink }]
+          ]
+        }
+      }
+    );
+    
+    await User.findOneAndUpdate(
+      { userId: chatId },
+      { 
+        inVipChannel: true,
+        subscription: plan
+      }
+    );
+    
+    return true;
+  } catch (error) {
+    console.error(`❌ Failed to create invite link:`, error.message);
+    return false;
+  }
+}
+
+// ==================== CRON ДЛЯ АВТОМАТИЧЕСКОГО УДАЛЕНИЯ ====================
+console.log('⏰ Starting subscription expiration checker...');
+
+const checkExpiredSubscriptions = async () => {
+  console.log('🔍 Checking for expired subscriptions...');
+  try {
+    const expiredUsers = await User.find({
+      expiresAt: { $lt: new Date() },
+      subscription: { $ne: 'none' }
+    });
+
+    console.log(`📊 Found ${expiredUsers.length} expired subscriptions`);
+
+    for (const user of expiredUsers) {
+      try {
+        console.log(`🚫 Removing user ${user.userId} from VIP channel (subscription expired)`);
+        
+        try {
+          await bot.banChatMember(process.env.VIP_CHANNEL_ID, user.userId);
+          await bot.unbanChatMember(process.env.VIP_CHANNEL_ID, user.userId);
+          console.log(`✅ Successfully removed user ${user.userId} from VIP channel`);
+        } catch (banError) {
+          console.log(`⚠️ Could not remove user ${user.userId} from channel:`, banError.message);
+        }
+
+        user.subscription = 'none';
+        user.inVipChannel = false;
+        await user.save();
+
+        try {
+          await bot.sendMessage(user.userId,
+            `❌ <b>Your VIP subscription has expired.</b>\n\nTo continue receiving premium signals, please renew your subscription.`,
+            {
+              parse_mode: 'HTML',
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: '🔄 Renew Subscription', callback_data: 'back_to_plans' }]
+                ]
+              }
+            }
+          );
+        } catch (msgError) {
+          console.log(`⚠️ Could not send expiration message to user ${user.userId}`);
+        }
+
+      } catch (error) {
+        console.error(`❌ Error processing expired subscription for user ${user.userId}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error in subscription expiration check:', error);
+  }
+};
+
+const expirationJob = new cron.CronJob('0 */6 * * *', checkExpiredSubscriptions);
+expirationJob.start();
+
+setTimeout(checkExpiredSubscriptions, 15000);
+
+// ==================== ОБРАБОТКА CALLBACK КНОПОК ====================
+bot.on('callback_query', async (callbackQuery) => {
+  const message = callbackQuery.message;
+  const data = callbackQuery.data;
+  const chatId = message.chat.id;
+
+  try {
+    if (data.startsWith('subscribe_')) {
+      const plan = data.split('_')[1];
+      await sendPaymentInstructions(chatId, plan);
+    } else if (data === 'my_subscription') {
+      await showUserSubscription(chatId);
+    } else if (data === 'how_to_pay') {
+      await sendHowToPay(chatId);
+    } else if (data === 'back_to_plans') {
+      await bot.deleteMessage(chatId, message.message_id);
+      const mockMsg = {
+        chat: { id: chatId },
+        text: '/start'
+      };
+      bot.emit('message', mockMsg);
+    }
+  } catch (error) {
+    console.error('Callback error:', error);
+    await bot.sendMessage(chatId, '❌ An error occurred. Please try again.');
+  }
+});
+
+// ==================== УЛУЧШЕННАЯ ФУНКЦИЯ ИНСТРУКЦИЙ ПО ОПЛАТЕ ====================
+async function sendPaymentInstructions(chatId, plan) {
+  const prices = { '1month': 24, '3months': 55 };
+  const amount = prices[plan];
+  const walletAddress = process.env.WALLET_ADDRESS;
+
+  const message = `💳 <b>Payment Instructions for ${plan.toUpperCase()}</b>\n\n` +
+    `📍 Send exactly <b>${amount} USDT</b> (TRC20) to:\n\n` +
+    `<code>${walletAddress}</code>\n\n` +
+    `⚠️ <b>Important:</b>\n` +
+    `• Send only USDT (TRC20)\n` +
+    `• Send exact amount: <b>${amount} USDT</b>\n` +
+    `• Network: <b>TRON (TRC20)</b>\n` +
+    `• After payment, forward the transaction hash to this bot\n\n` +
+    `Once verified, you'll get VIP access automatically!`;
+
+  await bot.sendMessage(chatId, message, { 
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📋 Copy Wallet Address', callback_data: 'copy_wallet' }],
+        [{ text: '🔙 Back to Plans', callback_data: 'back_to_plans' }]
+      ]
+    }
+  });
+
+  await User.findOneAndUpdate(
+    { userId: chatId },
+    { 
+      $set: { 
+        pendingPayment: { plan, amount, timestamp: new Date() }
+      }
+    }
+  );
+}
+
+// ==================== ОБРАБОТКА КНОПКИ COPY WALLET ====================
+bot.on('callback_query', async (callbackQuery) => {
+  const message = callbackQuery.message;
+  const data = callbackQuery.data;
+  const chatId = message.chat.id;
+
+  if (data === 'copy_wallet') {
+    await bot.answerCallbackQuery(callbackQuery.id, {
+      text: 'Wallet address copied to clipboard!',
+      show_alert: false
+    });
+    
+    // Также отправляем сообщение с адресом для удобства копирования
+    await bot.sendMessage(chatId, 
+      `📋 <b>Wallet Address for copying:</b>\n\n<code>${process.env.WALLET_ADDRESS}</code>`,
+      { parse_mode: 'HTML' }
+    );
+  }
+});
+
+// ==================== ПОКАЗАТЬ ИНФОРМАЦИЮ О ПОДПИСКЕ ====================
+async function showUserSubscription(chatId) {
+  const user = await User.findOne({ userId: chatId });
+  
+  if (!user || user.subscription === 'none') {
+    await bot.sendMessage(chatId, 
+      `📊 <b>Your Subscription Status</b>\n\n❌ No active subscription\nChoose a plan to get VIP access!`,
+      { 
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🎫 View Plans', callback_data: 'back_to_plans' }]
+          ]
+        }
+      }
+    );
+    return;
+  }
+
+  const remainingTime = Math.ceil((user.expiresAt - new Date()) / (1000 * 60 * 60 * 24));
+  
+  await bot.sendMessage(chatId,
+    `📊 <b>Your Subscription Status</b>\n\n` +
+    `✅ Plan: <b>${user.subscription.toUpperCase()}</b>\n` +
+    `⏰ Expires in: <b>${remainingTime} days</b>\n` +
+    `📅 Renewal: <b>${user.expiresAt.toLocaleDateString()}</b>\n` +
+    `🎯 VIP Access: <b>${user.inVipChannel ? 'Active' : 'Pending'}</b>`,
+    { 
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔄 Renew Subscription', callback_data: 'back_to_plans' }]
+        ]
+      }
+    }
+  );
+}
+
+// ==================== ИНСТРУКЦИЯ КАК ОПЛАТИТЬ ====================
+async function sendHowToPay(chatId) {
+  const message = `💡 <b>How to Pay with USDT</b>\n\n` +
+    `1. Open your crypto wallet (Trust Wallet, Binance, etc.)\n` +
+    `2. Select USDT and make sure to choose <b>TRON (TRC20)</b> network\n` +
+    `3. Send exact amount from the subscription plan\n` +
+    `4. Copy the <b>Transaction Hash (TXID)</b> after sending\n` +
+    `5. Forward the transaction hash to this bot\n\n` +
+    `⏳ Verification usually takes 5-15 minutes`;
+
+  await bot.sendMessage(chatId, message, { 
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🎫 View Subscription Plans', callback_data: 'back_to_plans' }]
+      ]
+    }
+  );
+}
+
+// ==================== ОБРАБОТКА ТРАНЗАКЦИЙ ====================
+bot.on('message', async (msg) => {
+  if (msg.text && msg.text.startsWith('/')) return;
+  
+  const chatId = msg.chat.id;
+  
+  if (msg.text && msg.text.length === 64 && /^[a-fA-F0-9]+$/.test(msg.text)) {
+    await bot.sendMessage(chatId, 
+      `⏳ <b>Transaction received!</b>\nVerifying hash: <code>${msg.text.substring(0, 12)}...</code>\n\nThis may take a few minutes.`,
+      { parse_mode: 'HTML' }
+    );
+    
+    setTimeout(async () => {
+      try {
+        const user = await User.findOne({ userId: chatId });
+        if (user && user.pendingPayment) {
+          const { plan } = user.pendingPayment;
+          const expiresAt = new Date();
+          expiresAt.setMonth(expiresAt.getMonth() + (plan === '1month' ? 1 : 3));
+          
+          await User.findOneAndUpdate(
+            { userId: chatId },
+            {
+              subscription: plan,
+              expiresAt,
+              $unset: { pendingPayment: 1 },
+              $push: {
+                transactions: {
+                  hash: msg.text,
+                  amount: user.pendingPayment.amount,
+                  status: 'completed',
+                  timestamp: new Date()
+                }
+              }
+            }
+          );
+
+          const addedToChannel = await addToVipChannel(chatId, plan);
+          
+          if (addedToChannel) {
+            await bot.sendMessage(chatId,
+              `✅ <b>Payment Verified!</b>\n\n` +
+              `Your <b>${plan}</b> VIP subscription has been activated!\n\n` +
+              `🎉 You now have access to the private VIP channel with premium trading signals.`,
+              { parse_mode: 'HTML' }
+            );
+          } else {
+            await bot.sendMessage(chatId,
+              `✅ <b>Payment Verified!</b>\n\n` +
+              `Your <b>${plan}</b> VIP subscription has been activated!\n\n` +
+              `⚠️ Could not automatically add you to VIP channel. Please contact support for manual addition.`,
+              { parse_mode: 'HTML' }
+            );
+          }
+        }
+      } catch (error) {
+        console.error('Error activating subscription:', error);
+        await bot.sendMessage(chatId, '❌ Error activating subscription. Please contact support.');
+      }
+    }, 10000);
+  }
+});
+
+// ==================== WEB ИНТЕРФЕЙС ====================
+app.use(express.json());
+app.use(express.static('public'));
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/health', (req, res) => {
+  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+  const botStatus = bot ? 'connected' : 'disconnected';
+  
+  res.json({
+    status: 'OK',
+    database: dbStatus,
+    telegram_bot: botStatus,
+    service: 'FXWave Crypto Bot',
+    timestamp: new Date().toISOString(),
+    features: ['auto_channel_management', 'subscription_tracking', 'payment_processing']
+  });
+});
+
+// Запускаем бота только после успешного подключения к MongoDB
+mongoose.connection.on('connected', () => {
+  console.log('✅ MongoDB connected, initializing Telegram bot...');
+  initializeBot();
+});
+
+// ==================== ЗАПУСК СЕРВЕРА ====================
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🌐 Web interface: http://localhost:${PORT}`);
+  console.log(`❤️  Health check: http://localhost:${PORT}/health`);
+  console.log('⏰ Subscription expiration checker active');
+  console.log('=========================================');
+  console.log('✅ FXWave Crypto Bot is ready!');
+  console.log('=========================================');
+});
+
+// ==================== ОБРАБОТКА ОШИБОК ====================
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+});
