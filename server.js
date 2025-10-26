@@ -30,7 +30,7 @@ mongoose.connect(process.env.MONGODB_URI)
     setTimeout(() => process.exit(1), 5000);
   });
 
-// Модель пользователя — с поддержкой transactions
+// Модель пользователя
 const userSchema = new mongoose.Schema({
   userId: { type: Number, required: true, unique: true },
   username: String,
@@ -60,8 +60,7 @@ bot.onText(/\/start/, async (msg) => {
     { userId: chatId, username: msg.chat.username, firstName: msg.chat.first_name },
     { upsert: true, setDefaultsOnInsert: true }
   );
-  await bot.sendMessage(chatId, `🚀 Welcome to FXWave VIP Access, ${msg.chat.first_name}!
-Choose your subscription plan and currency:`, {
+  await bot.sendMessage(chatId, `🚀 Welcome to FXWave VIP Access, ${msg.chat.first_name}!\nChoose your subscription plan:`, {
     reply_markup: {
       inline_keyboard: [
         [{ text: '📅 1 Month', callback_data: 'select_plan_1month' }],
@@ -72,7 +71,7 @@ Choose your subscription plan and currency:`, {
   });
 });
 
-// Выбор плана → выбор валюты
+// Обработка кнопок
 bot.on('callback_query', async (callbackQuery) => {
   const chatId = callbackQuery.message.chat.id;
   const data = callbackQuery.data;
@@ -106,24 +105,20 @@ bot.on('callback_query', async (callbackQuery) => {
         ? process.env.TON_WALLET_ADDRESS
         : process.env.USDT_WALLET_ADDRESS;
 
-      // Генерация QR-кода
-      const qrData = currency === 'TON'
-        ? `ton://transfer/${wallet}?amount=${amount * 1e9}` // amount in nanotons
-        : `tron:${wallet}?amount=${amount}`;
+      // Генерация QR с суммой
+      let qrData;
+      if (currency === 'TON') {
+        const nanoTons = Math.round(amount * 1e9);
+        qrData = `ton://transfer/${wallet}?amount=${nanoTons}`;
+      } else {
+        qrData = `tron:${wallet}?amount=${amount}`;
+      }
 
-      const qrBuffer = await QRCode.toBuffer(qrData);
+      const qrBuffer = await QRCode.toBuffer(qrData, { errorCorrectionLevel: 'M' });
       await bot.sendPhoto(chatId, qrBuffer, {
         caption: currency === 'TON'
-          ? `💳 <b>Pay with TON</b>
-📍 Send exactly <b>${amount} TON</b> to:
-<code>${wallet}</code>
-<i>Данный адрес предназначен только для системы TON</i>
-`
-          : `💳 <b>Pay with USDT (TRC20)</b>
-📍 Send exactly <b>${amount} USDT</b> to:
-<code>${wallet}</code>
-⚠️ Network: <b>TRON (TRC20)</b>
-`,
+          ? `💳 <b>Pay with TON</b>\n📍 Send exactly <b>${amount} TON</b> to:\n<code>${wallet}</code>\n<i>Данный адрес предназначен только для системы TON</i>`
+          : `💳 <b>Pay with USDT (TRC20)</b>\n📍 Send exactly <b>${amount} USDT</b> to:\n<code>${wallet}</code>\n⚠️ Network: <b>TRON (TRC20)</b>`,
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [[{ text: '🔙 Back to Plans', callback_data: 'back_to_start' }]]
@@ -212,7 +207,7 @@ bot.on('message', async (msg) => {
             );
           } else {
             await bot.sendMessage(chatId,
-              `✅ <b>Payment Verified!</b>\nYour <b>${plan}</b> VIP subscription has been activated!\n⚠️ Could not add you to VIP channel. Please contact support: @fxfeelgood`,
+              `✅ <b>Payment Verified!</b>\nYour <b>${plan}</b> VIP subscription has been activated!\n⚠️ <b>Could not add you to VIP channel.</b> Please contact support: @fxfeelgood`,
               { parse_mode: 'HTML' }
             );
           }
@@ -254,6 +249,38 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' });
 });
 
+// Маршрут для QR-кодов с суммой
+app.get('/qr', async (req, res) => {
+  const { currency, plan } = req.query;
+  const usdtWallet = process.env.USDT_WALLET_ADDRESS;
+  const tonWallet = process.env.TON_WALLET_ADDRESS;
+
+  const prices = {
+    USDT: { '1month': 24, '3months': 55 },
+    TON: { '1month': 11, '3months': 25 }
+  };
+
+  const amount = prices[currency]?.[plan] || (currency === 'TON' ? 11 : 24);
+  let data = '';
+
+  if (currency === 'TON') {
+    const nanoTons = Math.round(amount * 1e9);
+    data = `ton://transfer/${tonWallet}?amount=${nanoTons}`;
+  } else {
+    data = `tron:${usdtWallet}?amount=${amount}`;
+  }
+
+  try {
+    const qrBuffer = await QRCode.toBuffer(data, { errorCorrectionLevel: 'M' });
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(qrBuffer);
+  } catch (err) {
+    console.error('QR error:', err);
+    res.status(500).send('QR generation failed');
+  }
+});
+
 // Keep-alive для Render
 if (process.env.RENDER_EXTERNAL_URL) {
   setInterval(async () => {
@@ -283,7 +310,7 @@ setInterval(async () => {
   }
 }, 60 * 60 * 1000);
 
-// Запуск
+// Запуск сервера
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
