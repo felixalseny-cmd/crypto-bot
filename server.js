@@ -2,13 +2,19 @@ require('dotenv').config();
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const mongoose = require('mongoose');
+const QRCode = require('qrcode');
 const path = require('path');
-
 const app = express();
 const PORT = process.env.PORT || 10000;
 
 // Проверка переменных окружения
-const required = ['BOT_TOKEN', 'MONGODB_URI', 'VIP_CHANNEL_ID', 'WALLET_ADDRESS'];
+const required = [
+  'BOT_TOKEN',
+  'MONGODB_URI',
+  'VIP_CHANNEL_ID',
+  'USDT_WALLET_ADDRESS',
+  'TON_WALLET_ADDRESS'
+];
 for (const key of required) {
   if (!process.env[key]) {
     console.error(`❌ Missing ${key}`);
@@ -24,105 +30,130 @@ mongoose.connect(process.env.MONGODB_URI)
     setTimeout(() => process.exit(1), 5000);
   });
 
-// Модель пользователя
+// Модель пользователя — с поддержкой transactions
 const userSchema = new mongoose.Schema({
   userId: { type: Number, required: true, unique: true },
   username: String,
   firstName: String,
   subscription: { type: String, default: 'none' },
   expiresAt: Date,
-  pendingPayment: { plan: String, amount: Number }
+  pendingPayment: { plan: String, amount: Number, currency: String },
+  transactions: [{
+    hash: String,
+    amount: Number,
+    currency: { type: String, default: 'USDT' },
+    status: { type: String, default: 'pending' },
+    timestamp: { type: Date, default: Date.now }
+  }]
 });
 
 const User = mongoose.model('User', userSchema);
 
-// Telegram Bot — ТОЛЬКО POLLING
+// Telegram Bot
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-// Команда /start
+// Главное меню
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   await User.findOneAndUpdate(
     { userId: chatId },
     { userId: chatId, username: msg.chat.username, firstName: msg.chat.first_name },
-    { upsert: true }
+    { upsert: true, setDefaultsOnInsert: true }
   );
-  await bot.sendMessage(chatId, `🚀 Welcome to FXWave VIP Access, ${msg.chat.first_name}!\n\nChoose your subscription plan:`, {
+  await bot.sendMessage(chatId, `🚀 Welcome to FXWave VIP Access, ${msg.chat.first_name}!
+Choose your subscription plan and currency:`, {
     reply_markup: {
       inline_keyboard: [
-        [
-          { text: '📅 1 Month - 24 USDT', callback_data: 'subscribe_1month' },
-          { text: '⭐ 3 Months - 55 USDT', callback_data: 'subscribe_3months' }
-        ],
-        [
-          { text: 'ℹ️ My Subscription', callback_data: 'my_subscription' },
-          { text: '💳 How to Pay', callback_data: 'how_to_pay' }
-        ]
+        [{ text: '📅 1 Month', callback_data: 'select_plan_1month' }],
+        [{ text: '⭐ 3 Months', callback_data: 'select_plan_3months' }],
+        [{ text: 'ℹ️ My Subscription', callback_data: 'my_subscription' }]
       ]
     }
   });
 });
 
-// Обработка кнопок
+// Выбор плана → выбор валюты
 bot.on('callback_query', async (callbackQuery) => {
   const chatId = callbackQuery.message.chat.id;
   const data = callbackQuery.data;
 
   try {
-    if (data.startsWith('subscribe_')) {
-      const plan = data.split('_')[1];
-      const prices = { '1month': 24, '3months': 55 };
-      const amount = prices[plan];
-      const wallet = process.env.WALLET_ADDRESS;
-
-      await bot.sendMessage(chatId,
-        `💳 <b>Payment Instructions for ${plan.toUpperCase()}</b>\n\n` +
-        `📍 Send exactly <b>${amount} USDT</b> (TRC20) to:\n<code>${wallet}</code>\n\n` +
-        `⚠️ <b>Important:</b>\n` +
-        `• Send only USDT (TRC20)\n` +
-        `• Send exact amount: <b>${amount} USDT</b>\n` +
-        `• Network: <b>TRON (TRC20)</b>\n` +
-        `• After payment, forward the transaction hash to this bot\n\n` +
-        `Once verified, you'll get VIP access automatically!`,
+    if (data.startsWith('select_plan_')) {
+      const plan = data.split('_')[2];
+      await bot.editMessageText(
+        `💳 Choose payment currency for <b>${plan === '1month' ? '1 Month' : '3 Months'}</b>:`,
         {
+          chat_id: chatId,
+          message_id: callbackQuery.message.message_id,
           parse_mode: 'HTML',
           reply_markup: {
-            inline_keyboard: [[{ text: '🔙 Back to Plans', callback_data: 'back_to_plans' }]]
+            inline_keyboard: [
+              [{ text: '🪙 TON', callback_data: `pay_TON_${plan}` }],
+              [{ text: '💵 USDT (TRC20)', callback_data: `pay_USDT_${plan}` }],
+              [{ text: '🔙 Back', callback_data: 'back_to_start' }]
+            ]
           }
         }
       );
+    } else if (data.startsWith('pay_')) {
+      const [_, currency, plan] = data.split('_');
+      const prices = {
+        USDT: { '1month': 24, '3months': 55 },
+        TON: { '1month': 11, '3months': 25 }
+      };
+      const amount = prices[currency][plan];
+      const wallet = currency === 'TON'
+        ? process.env.TON_WALLET_ADDRESS
+        : process.env.USDT_WALLET_ADDRESS;
 
-      await User.findOneAndUpdate({ userId: chatId }, { $set: { pendingPayment: { plan, amount } } });
+      // Генерация QR-кода
+      const qrData = currency === 'TON'
+        ? `ton://transfer/${wallet}?amount=${amount * 1e9}` // amount in nanotons
+        : `tron:${wallet}?amount=${amount}`;
+
+      const qrBuffer = await QRCode.toBuffer(qrData);
+      await bot.sendPhoto(chatId, qrBuffer, {
+        caption: currency === 'TON'
+          ? `💳 <b>Pay with TON</b>
+📍 Send exactly <b>${amount} TON</b> to:
+<code>${wallet}</code>
+<i>Данный адрес предназначен только для системы TON</i>
+`
+          : `💳 <b>Pay with USDT (TRC20)</b>
+📍 Send exactly <b>${amount} USDT</b> to:
+<code>${wallet}</code>
+⚠️ Network: <b>TRON (TRC20)</b>
+`,
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [[{ text: '🔙 Back to Plans', callback_data: 'back_to_start' }]]
+        }
+      });
+
+      await User.findOneAndUpdate({ userId: chatId }, {
+        $set: { pendingPayment: { plan, amount, currency } }
+      });
+
     } else if (data === 'my_subscription') {
       const user = await User.findOne({ userId: chatId });
       if (!user || user.subscription === 'none') {
         await bot.sendMessage(chatId,
-          `📊 <b>Your Subscription Status</b>\n\n❌ No active subscription\nChoose a plan to get VIP access!`,
-          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🎫 View Plans', callback_data: 'back_to_plans' }]] } }
+          `📊 <b>Your Subscription Status</b>\n❌ No active subscription\nChoose a plan to get VIP access!`,
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🎫 View Plans', callback_data: 'back_to_start' }]] } }
         );
       } else {
-        const days = Math.ceil((user.expiresAt - new Date()) / (1000 * 60 * 60 * 24));
+        const now = new Date();
+        const days = user.expiresAt > now ? Math.ceil((user.expiresAt - now) / (1000 * 60 * 60 * 24)) : 0;
         await bot.sendMessage(chatId,
-          `📊 <b>Your Subscription Status</b>\n\n` +
+          `📊 <b>Your Subscription Status</b>\n` +
           `✅ Plan: <b>${user.subscription.toUpperCase()}</b>\n` +
           `⏰ Expires in: <b>${days} days</b>\n` +
-          `📅 Renewal: <b>${user.expiresAt.toLocaleDateString()}</b>`,
-          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔄 Renew Subscription', callback_data: 'back_to_plans' }]] } }
+          `📅 Expiry: <b>${user.expiresAt.toLocaleDateString()}</b>`,
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔄 Renew', callback_data: 'back_to_start' }]] } }
         );
       }
-    } else if (data === 'how_to_pay') {
-      await bot.sendMessage(chatId,
-        `💡 <b>How to Pay with USDT</b>\n\n` +
-        `1. Open your crypto wallet (Trust Wallet, Binance, etc.)\n` +
-        `2. Select USDT and make sure to choose <b>TRON (TRC20)</b> network\n` +
-        `3. Send exact amount from the subscription plan\n` +
-        `4. Copy the <b>Transaction Hash (TXID)</b> after sending\n` +
-        `5. Forward the transaction hash to this bot\n\n` +
-        `⏳ Verification usually takes 5-15 minutes`,
-        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🎫 View Plans', callback_data: 'back_to_plans' }]] } }
-      );
-    } else if (data === 'back_to_plans') {
-      await bot.deleteMessage(chatId, callbackQuery.message.message_id);
+    } else if (data === 'back_to_start') {
+      await bot.deleteMessage(chatId, callbackQuery.message.message_id).catch(() => {});
       bot.emit('message', { chat: { id: chatId }, text: '/start' });
     }
   } catch (error) {
@@ -131,19 +162,18 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 });
 
-// Обработка транзакций
+// Обработка TXID
 bot.on('message', async (msg) => {
   if (!msg.text || msg.text.startsWith('/')) return;
   const chatId = msg.chat.id;
   const tx = msg.text.trim();
   if (tx.length === 64 && /^[a-fA-F0-9]+$/.test(tx)) {
     await bot.sendMessage(chatId, '⏳ Verifying payment...', { parse_mode: 'HTML' });
-
     setTimeout(async () => {
       try {
         const user = await User.findOne({ userId: chatId });
         if (user && user.pendingPayment) {
-          const { plan } = user.pendingPayment;
+          const { plan, amount, currency } = user.pendingPayment;
           const expiresAt = new Date();
           expiresAt.setMonth(expiresAt.getMonth() + (plan === '1month' ? 1 : 3));
 
@@ -156,7 +186,8 @@ bot.on('message', async (msg) => {
               $push: {
                 transactions: {
                   hash: tx,
-                  amount: user.pendingPayment.amount,
+                  amount,
+                  currency,
                   status: 'completed',
                   timestamp: new Date()
                 }
@@ -164,7 +195,6 @@ bot.on('message', async (msg) => {
             }
           );
 
-          // Попытка добавить в канал
           let added = false;
           try {
             await bot.addChatMember(process.env.VIP_CHANNEL_ID, chatId);
@@ -177,49 +207,41 @@ bot.on('message', async (msg) => {
 
           if (added) {
             await bot.sendMessage(chatId,
-              `✅ <b>Payment Verified!</b>\n\nYour <b>${plan}</b> VIP subscription has been activated!\n\n🎉 <b>You have been added to the VIP channel!</b>`,
+              `✅ <b>Payment Verified!</b>\nYour <b>${plan}</b> VIP subscription has been activated!\n🎉 You’ve been added to the VIP channel!`,
               { parse_mode: 'HTML' }
             );
           } else {
             await bot.sendMessage(chatId,
-              `✅ <b>Payment Verified!</b>\n\nYour <b>${plan}</b> VIP subscription has been activated!\n\n⚠️ <b>Could not add you to VIP channel.</b> Please contact support.`,
+              `✅ <b>Payment Verified!</b>\nYour <b>${plan}</b> VIP subscription has been activated!\n⚠️ Could not add you to VIP channel. Please contact support: @fxfeelgood`,
               { parse_mode: 'HTML' }
             );
           }
+        } else {
+          await bot.sendMessage(chatId,
+            '⚠️ No pending subscription found. Please select a plan first via /start.',
+            { parse_mode: 'HTML' }
+          );
         }
       } catch (error) {
         console.error('Error activating subscription:', error);
-        await bot.sendMessage(chatId, '❌ Error activating subscription. Please contact support.', { parse_mode: 'HTML' });
+        await bot.sendMessage(chatId, '❌ Error. Please contact support: @fxfeelgood', { parse_mode: 'HTML' });
       }
-    }, 10000);
+    }, 8000);
   }
 });
 
-// Команда /testchannel — для диагностики
+// Команда /testchannel
 bot.onText(/\/testchannel/, async (msg) => {
   const chatId = msg.chat.id;
   try {
     const chat = await bot.getChat(process.env.VIP_CHANNEL_ID);
-    await bot.sendMessage(chatId, `✅ <b>Channel found:</b> ${chat.title}`, { parse_mode: 'HTML' });
-
+    await bot.sendMessage(chatId, `✅ Channel: ${chat.title}`, { parse_mode: 'HTML' });
     const admins = await bot.getChatAdministrators(process.env.VIP_CHANNEL_ID);
     const botInfo = await bot.getMe();
-    const isBotAdmin = admins.some(admin => admin.user.id === botInfo.id && admin.can_invite_users);
-
-    if (isBotAdmin) {
-      await bot.sendMessage(chatId, `✅ <b>Bot is administrator</b> with invite rights.`, { parse_mode: 'HTML' });
-    } else {
-      await bot.sendMessage(chatId, `❌ <b>Bot is NOT administrator</b> or missing "Add members" permission.`, { parse_mode: 'HTML' });
-    }
-
-    try {
-      await bot.addChatMember(process.env.VIP_CHANNEL_ID, chatId);
-      await bot.sendMessage(chatId, `✅ <b>Test: successfully added to VIP channel.</b>`, { parse_mode: 'HTML' });
-    } catch (e) {
-      await bot.sendMessage(chatId, `❌ <b>Test: failed to add to VIP channel.</b>`, { parse_mode: 'HTML' });
-    }
-  } catch (error) {
-    await bot.sendMessage(chatId, `❌ <b>Test error:</b> ${error.message}`, { parse_mode: 'HTML' });
+    const isBotAdmin = admins.some(a => a.user.id === botInfo.id && a.can_invite_users);
+    await bot.sendMessage(chatId, isBotAdmin ? '✅ Bot is admin with invite rights' : '❌ Bot is NOT admin');
+  } catch (e) {
+    await bot.sendMessage(chatId, `❌ Error: ${e.message}`);
   }
 });
 
@@ -232,20 +254,36 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' });
 });
 
-// =============== 🌐 KEEP-ALIVE FOR RENDER (FREE TIER) ===============
+// Keep-alive для Render
 if (process.env.RENDER_EXTERNAL_URL) {
-  const url = process.env.RENDER_EXTERNAL_URL;
   setInterval(async () => {
     try {
-      const res = await fetch(`${url}/health`);
-      console.log(`✅ Keep-alive ping: ${res.status}`);
-    } catch (err) {
-      console.log('⚠️ Keep-alive error:', err.message);
-    }
-  }, 14 * 60 * 1000); // каждые 14 минут
+      await fetch(`${process.env.RENDER_EXTERNAL_URL}/health`);
+    } catch (e) { /* ignore */ }
+  }, 14 * 60 * 1000);
 }
 
-// Запуск сервера
+// Удаление просроченных подписок — ВНЕ обработчика исключений!
+setInterval(async () => {
+  const now = new Date();
+  const expired = await User.find({
+    expiresAt: { $lt: now },
+    subscription: { $ne: 'none' }
+  });
+  for (const user of expired) {
+    try {
+      await bot.banChatMember(process.env.VIP_CHANNEL_ID, user.userId);
+      await bot.unbanChatMember(process.env.VIP_CHANNEL_ID, user.userId);
+      user.subscription = 'none';
+      await user.save();
+      await bot.sendMessage(user.userId, "❌ Your VIP subscription has expired.");
+    } catch (e) {
+      console.log("Failed to remove user", user.userId, e.message);
+    }
+  }
+}, 60 * 60 * 1000);
+
+// Запуск
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
@@ -256,30 +294,5 @@ process.on('unhandledRejection', (reason) => {
 });
 process.on('uncaughtException', (error) => {
   console.error('❌ Uncaught Exception:', error);
-  
-  // Удаление по истечении срока (раз в час)
-setInterval(async () => {
-  const expired = await User.find({
-    expiresAt: { $lt: new Date() },
-    subscription: { $ne: 'none' }
-  });
-
-  for (const user of expired) {
-    try {
-      // Удаляем из канала (работает всегда, если бот — админ)
-      await bot.banChatMember(process.env.VIP_CHANNEL_ID, user.userId);
-      await bot.unbanChatMember(process.env.VIP_CHANNEL_ID, user.userId);
-      
-      // Сбрасываем подписку
-      user.subscription = 'none';
-      await user.save();
-
-      // Уведомляем
-      await bot.sendMessage(user.userId, "❌ Your VIP subscription has expired.");
-    } catch (e) {
-      console.log("Failed to remove user", user.userId);
-    }
-  }
-}, 60 * 60 * 1000); // каждые 60 минут
-
+  process.exit(1);
 });
