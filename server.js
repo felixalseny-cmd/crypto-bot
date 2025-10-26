@@ -4,7 +4,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const mongoose = require('mongoose');
 const QRCode = require('qrcode');
 const path = require('path');
-const fetch = require('node-fetch'); // Для TON API
+const fetch = require('node-fetch');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
@@ -53,7 +53,7 @@ const User = mongoose.model('User', userSchema);
 // 🤖 Telegram Bot
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-// 📢 Отправка уведомления админу о новой оплате (USDT/USDC)
+// 📢 Уведомление админу
 async function notifyAdmin(txHash, userId, username, amount, currency, plan) {
   const adminId = process.env.ADMIN_TELEGRAM_ID;
   const message = `
@@ -62,7 +62,7 @@ async function notifyAdmin(txHash, userId, username, amount, currency, plan) {
 💱 Валюта: ${currency}
 💰 Сумма: ${amount}
 📅 План: ${plan}
-🔗 TX: https://tronscan.org/tx/${txHash}
+🔗 TX: https://${currency === 'TON' ? 'tonscan.org' : 'tronscan.org'}/tx/${txHash}
 `;
   try {
     await bot.sendMessage(adminId, message, { parse_mode: 'HTML' });
@@ -80,9 +80,9 @@ bot.onText(/\/start/, async (msg) => {
     { upsert: true, setDefaultsOnInsert: true }
   );
   const keyboard = [
-    [{ text: '📅 1 Month', callback_ 'select_plan_1month' }],
-    [{ text: '⭐ 3 Months', callback_ 'select_plan_3months' }],
-    [{ text: 'ℹ️ My Subscription', callback_ 'my_subscription' }]
+    [{ text: '📅 1 Month', callback_data: 'select_plan_1month' }],
+    [{ text: '⭐ 3 Months', callback_data: 'select_plan_3months' }],
+    [{ text: 'ℹ️ My Subscription', callback_data: 'my_subscription' }]
   ];
   await bot.sendMessage(chatId, `🚀 Welcome to FXWave VIP Access, ${msg.chat.first_name}!\nChoose your plan:`, {
     reply_markup: { inline_keyboard: keyboard }
@@ -97,17 +97,14 @@ bot.on('callback_query', async (callbackQuery) => {
     if (data.startsWith('select_plan_')) {
       const plan = data.split('_')[2];
       const buttons = [];
-      if (process.env.TON_WALLET_ADDRESS) buttons.push([{ text: '🪙 TON', callback_ `pay_TON_${plan}` }]);
-      if (process.env.USDT_WALLET_ADDRESS) buttons.push([{ text: '💵 USDT (TRC20)', callback_ `pay_USDT_${plan}` }]);
-      if (process.env.USDC_WALLET_ADDRESS) buttons.push([{ text: '🔵 USDC (TRC20)', callback_ `pay_USDC_${plan}` }]);
+      if (process.env.TON_WALLET_ADDRESS) buttons.push([{ text: '🪙 TON', callback_data: `pay_TON_${plan}` }]);
+      if (process.env.USDT_WALLET_ADDRESS) buttons.push([{ text: '💵 USDT (TRC20)', callback_data: `pay_USDT_${plan}` }]);
+      if (process.env.USDC_WALLET_ADDRESS) buttons.push([{ text: '🔵 USDC (TRC20)', callback_data: `pay_USDC_${plan}` }]);
       if (buttons.length === 0) {
-        await bot.editMessageText(
-          '❌ Payment is temporarily unavailable.',
-          { chat_id: chatId, message_id: callbackQuery.message.message_id }
-        );
+        await bot.editMessageText('❌ Payment is temporarily unavailable.', { chat_id: chatId, message_id: callbackQuery.message.message_id });
         return;
       }
-      buttons.push([{ text: '🔙 Back', callback_ 'back_to_start' }]);
+      buttons.push([{ text: '🔙 Back', callback_data: 'back_to_start' }]);
       await bot.editMessageText(
         `💳 Choose currency for <b>${plan === '1month' ? '1 Month' : '3 Months'}</b>:`,
         {
@@ -121,10 +118,7 @@ bot.on('callback_query', async (callbackQuery) => {
       const [_, currency, plan] = data.split('_');
       const wallet = process.env[`${currency}_WALLET_ADDRESS`];
       if (!wallet) {
-        await bot.answerCallbackQuery(callbackQuery.id, {
-          text: `${currency} payments are disabled`,
-          show_alert: true
-        });
+        await bot.answerCallbackQuery(callbackQuery.id, { text: `${currency} payments disabled`, show_alert: true });
         return;
       }
       const prices = {
@@ -147,7 +141,7 @@ bot.on('callback_query', async (callbackQuery) => {
       await bot.sendPhoto(chatId, qrBuffer, {
         caption,
         parse_mode: 'HTML',
-        reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_ 'back_to_start' }]] }
+        reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'back_to_start' }]] }
       });
       await User.findOneAndUpdate({ userId: chatId }, { $set: { pendingPayment: { plan, amount, currency } } });
     } else if (data === 'my_subscription') {
@@ -155,7 +149,7 @@ bot.on('callback_query', async (callbackQuery) => {
       if (!user || user.subscription === 'none') {
         await bot.sendMessage(chatId,
           `📊 <b>Your Subscription Status</b>\n❌ No active subscription\nChoose a plan to get VIP access!`,
-          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🎫 View Plans', callback_ 'back_to_start' }]] } }
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🎫 View Plans', callback_data: 'back_to_start' }]] } }
         );
       } else {
         const now = new Date();
@@ -165,7 +159,7 @@ bot.on('callback_query', async (callbackQuery) => {
           `✅ Plan: <b>${user.subscription.toUpperCase()}</b>\n` +
           `⏰ Expires in: <b>${days} days</b>\n` +
           `📅 Expiry: <b>${user.expiresAt.toLocaleDateString()}</b>`,
-          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔄 Renew', callback_ 'back_to_start' }]] } }
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔄 Renew', callback_data: 'back_to_start' }]] } }
         );
       }
     } else if (data === 'back_to_start') {
@@ -180,7 +174,7 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 });
 
-// 🔍 Автоматическая проверка TON через TON Center (публичный API)
+// 🔍 Автоматическая проверка TON
 async function verifyTONTransaction(txHash, expectedAmount, walletAddress) {
   try {
     const url = `https://toncenter.com/api/v2/getTransaction?transaction_id=${txHash}`;
@@ -194,7 +188,7 @@ async function verifyTONTransaction(txHash, expectedAmount, walletAddress) {
     if (dest.toLowerCase() !== normalizedWallet) return false;
     const amountNano = parseInt(tx.in_msg.value) || 0;
     const amount = amountNano / 1e9;
-    return Math.abs(amount - expectedAmount) < 0.01; // допуск 0.01 TON
+    return Math.abs(amount - expectedAmount) < 0.01;
   } catch (e) {
     console.error('TON verification error:', e);
     return false;
@@ -207,9 +201,7 @@ bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const tx = msg.text.trim();
 
-  if (tx.length !== 64 || !/^[a-fA-F0-9]+$/.test(tx)) {
-    return;
-  }
+  if (tx.length !== 64 || !/^[a-fA-F0-9]+$/.test(tx)) return;
 
   const user = await User.findOne({ userId: chatId });
   if (!user || !user.pendingPayment) {
@@ -221,7 +213,6 @@ bot.on('message', async (msg) => {
 
   const { plan, amount, currency } = user.pendingPayment;
 
-  // Проверка дубликата
   const existingTx = await User.findOne({ 'transactions.hash': tx });
   if (existingTx) {
     return await bot.sendMessage(chatId,
@@ -230,12 +221,10 @@ bot.on('message', async (msg) => {
     );
   }
 
-  let isVerified = false;
-
   if (currency === 'TON') {
     const wallet = process.env.TON_WALLET_ADDRESS;
-    isVerified = await verifyTONTransaction(tx, amount, wallet);
-    if (isVerified) {
+    const isValid = await verifyTONTransaction(tx, amount, wallet);
+    if (isValid) {
       const expiresAt = new Date();
       expiresAt.setMonth(expiresAt.getMonth() + (plan === '1month' ? 1 : 3));
       await User.findOneAndUpdate(
@@ -277,7 +266,7 @@ bot.on('message', async (msg) => {
     }
   }
 
-  // Для USDT и USDC — уведомление админу
+  // USDT / USDC — уведомление админу
   await User.findOneAndUpdate(
     { userId: chatId },
     {
