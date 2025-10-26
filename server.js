@@ -7,7 +7,7 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Проверка переменных окружения
+// 🔑 Проверка переменных окружения — ОБНОВЛЕНО
 const required = [
   'BOT_TOKEN',
   'MONGODB_URI',
@@ -22,7 +22,7 @@ for (const key of required) {
   }
 }
 
-// Подключение к MongoDB
+// 🗄️ Подключение к MongoDB
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('✅ MongoDB connected'))
   .catch(err => {
@@ -30,7 +30,7 @@ mongoose.connect(process.env.MONGODB_URI)
     setTimeout(() => process.exit(1), 5000);
   });
 
-// Модель пользователя
+// 👤 Модель пользователя — с поддержкой transactions
 const userSchema = new mongoose.Schema({
   userId: { type: Number, required: true, unique: true },
   username: String,
@@ -49,10 +49,10 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
-// Telegram Bot
+// 🤖 Telegram Bot
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-// Главное меню
+// 🏠 Главное меню
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   await User.findOneAndUpdate(
@@ -60,7 +60,7 @@ bot.onText(/\/start/, async (msg) => {
     { userId: chatId, username: msg.chat.username, firstName: msg.chat.first_name },
     { upsert: true, setDefaultsOnInsert: true }
   );
-  await bot.sendMessage(chatId, `🚀 Welcome to FXWave VIP Access, ${msg.chat.first_name}!\nChoose your subscription plan:`, {
+  await bot.sendMessage(chatId, `🚀 Welcome to FXWave VIP Access, ${msg.chat.first_name}!\nChoose your plan:`, {
     reply_markup: {
       inline_keyboard: [
         [{ text: '📅 1 Month', callback_data: 'select_plan_1month' }],
@@ -71,7 +71,7 @@ bot.onText(/\/start/, async (msg) => {
   });
 });
 
-// Обработка кнопок
+// 🖱️ Обработка кнопок
 bot.on('callback_query', async (callbackQuery) => {
   const chatId = callbackQuery.message.chat.id;
   const data = callbackQuery.data;
@@ -80,7 +80,7 @@ bot.on('callback_query', async (callbackQuery) => {
     if (data.startsWith('select_plan_')) {
       const plan = data.split('_')[2];
       await bot.editMessageText(
-        `💳 Choose payment currency for <b>${plan === '1month' ? '1 Month' : '3 Months'}</b>:`,
+        `💳 Choose currency for <b>${plan === '1month' ? '1 Month' : '3 Months'}</b>:`,
         {
           chat_id: chatId,
           message_id: callbackQuery.message.message_id,
@@ -96,14 +96,9 @@ bot.on('callback_query', async (callbackQuery) => {
       );
     } else if (data.startsWith('pay_')) {
       const [_, currency, plan] = data.split('_');
-      const prices = {
-        USDT: { '1month': 24, '3months': 55 },
-        TON: { '1month': 11, '3months': 25 }
-      };
+      const prices = { USDT: { '1month': 24, '3months': 55 }, TON: { '1month': 11, '3months': 25 } };
       const amount = prices[currency][plan];
-      const wallet = currency === 'TON'
-        ? process.env.TON_WALLET_ADDRESS
-        : process.env.USDT_WALLET_ADDRESS;
+      const wallet = currency === 'TON' ? process.env.TON_WALLET_ADDRESS : process.env.USDT_WALLET_ADDRESS;
 
       // Генерация QR с суммой
       let qrData;
@@ -121,13 +116,11 @@ bot.on('callback_query', async (callbackQuery) => {
           : `💳 <b>Pay with USDT (TRC20)</b>\n📍 Send exactly <b>${amount} USDT</b> to:\n<code>${wallet}</code>\n⚠️ Network: <b>TRON (TRC20)</b>`,
         parse_mode: 'HTML',
         reply_markup: {
-          inline_keyboard: [[{ text: '🔙 Back to Plans', callback_data: 'back_to_start' }]]
+          inline_keyboard: [[{ text: '🔙 Back', callback_data: 'back_to_start' }]]
         }
       });
 
-      await User.findOneAndUpdate({ userId: chatId }, {
-        $set: { pendingPayment: { plan, amount, currency } }
-      });
+      await User.findOneAndUpdate({ userId: chatId }, { $set: { pendingPayment: { plan, amount, currency } } });
 
     } else if (data === 'my_subscription') {
       const user = await User.findOne({ userId: chatId });
@@ -157,7 +150,7 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 });
 
-// Обработка TXID
+// 🧾 Обработка TXID
 bot.on('message', async (msg) => {
   if (!msg.text || msg.text.startsWith('/')) return;
   const chatId = msg.chat.id;
@@ -225,7 +218,7 @@ bot.on('message', async (msg) => {
   }
 });
 
-// Команда /testchannel
+// 🧪 /testchannel
 bot.onText(/\/testchannel/, async (msg) => {
   const chatId = msg.chat.id;
   try {
@@ -240,7 +233,7 @@ bot.onText(/\/testchannel/, async (msg) => {
   }
 });
 
-// Web server
+// 🌐 Web server
 app.use(express.static('public'));
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -249,20 +242,15 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' });
 });
 
-// Маршрут для QR-кодов с суммой
+// 🖼️ QR-коды
 app.get('/qr', async (req, res) => {
-  const { currency, plan } = req.query;
+  const { currency = 'USDT', plan = '1month' } = req.query;
   const usdtWallet = process.env.USDT_WALLET_ADDRESS;
   const tonWallet = process.env.TON_WALLET_ADDRESS;
-
-  const prices = {
-    USDT: { '1month': 24, '3months': 55 },
-    TON: { '1month': 11, '3months': 25 }
-  };
-
+  const prices = { USDT: { '1month': 24, '3months': 55 }, TON: { '1month': 11, '3months': 25 } };
   const amount = prices[currency]?.[plan] || (currency === 'TON' ? 11 : 24);
-  let data = '';
 
+  let data = '';
   if (currency === 'TON') {
     const nanoTons = Math.round(amount * 1e9);
     data = `ton://transfer/${tonWallet}?amount=${nanoTons}`;
@@ -281,7 +269,7 @@ app.get('/qr', async (req, res) => {
   }
 });
 
-// Keep-alive для Render
+// 🔁 Keep-alive для Render
 if (process.env.RENDER_EXTERNAL_URL) {
   setInterval(async () => {
     try {
@@ -290,7 +278,7 @@ if (process.env.RENDER_EXTERNAL_URL) {
   }, 14 * 60 * 1000);
 }
 
-// Удаление просроченных подписок — ВНЕ обработчика исключений!
+// 🗑️ Удаление просроченных подписок — ВНЕ обработчика исключений!
 setInterval(async () => {
   const now = new Date();
   const expired = await User.find({
@@ -310,12 +298,12 @@ setInterval(async () => {
   }
 }, 60 * 60 * 1000);
 
-// Запуск сервера
+// ▶️ Запуск сервера
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 
-// Обработка ошибок
+// ❌ Обработка ошибок
 process.on('unhandledRejection', (reason) => {
   console.error('❌ Unhandled Rejection:', reason);
 });
