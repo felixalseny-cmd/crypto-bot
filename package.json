@@ -1,0 +1,19 @@
+{
+  "name": "crypto-bot",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-telegram-bot-api": "^0.64.0",
+    "mongoose": "^8.0.3",
+    "dotenv": "^16.3.1",
+    "qrcode": "^1.5.3",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": "20.x"
+  }
+}
