@@ -4,7 +4,6 @@ const TelegramBot = require('node-telegram-bot-api');
 const mongoose = require('mongoose');
 const QRCode = require('qrcode');
 const path = require('path');
-const fetch = require('node-fetch');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
@@ -80,9 +79,9 @@ bot.onText(/\/start/, async (msg) => {
     { upsert: true, setDefaultsOnInsert: true }
   );
   const keyboard = [
-    [{ text: '📅 1 Month', callback_data: 'select_plan_1month' }],
-    [{ text: '⭐ 3 Months', callback_data: 'select_plan_3months' }],
-    [{ text: 'ℹ️ My Subscription', callback_data: 'my_subscription' }]
+    [{ text: '📅 1 Month', callback_ 'select_plan_1month' }],
+    [{ text: '⭐ 3 Months', callback_ 'select_plan_3months' }],
+    [{ text: 'ℹ️ My Subscription', callback_ 'my_subscription' }]
   ];
   await bot.sendMessage(chatId, `🚀 Welcome to FXWave VIP Access, ${msg.chat.first_name}!\nChoose your plan:`, {
     reply_markup: { inline_keyboard: keyboard }
@@ -97,14 +96,14 @@ bot.on('callback_query', async (callbackQuery) => {
     if (data.startsWith('select_plan_')) {
       const plan = data.split('_')[2];
       const buttons = [];
-      if (process.env.TON_WALLET_ADDRESS) buttons.push([{ text: '🪙 TON', callback_data: `pay_TON_${plan}` }]);
-      if (process.env.USDT_WALLET_ADDRESS) buttons.push([{ text: '💵 USDT (TRC20)', callback_data: `pay_USDT_${plan}` }]);
-      if (process.env.USDC_WALLET_ADDRESS) buttons.push([{ text: '🔵 USDC (TRC20)', callback_data: `pay_USDC_${plan}` }]);
+      if (process.env.TON_WALLET_ADDRESS) buttons.push([{ text: '🪙 TON', callback_ `pay_TON_${plan}` }]);
+      if (process.env.USDT_WALLET_ADDRESS) buttons.push([{ text: '💵 USDT (TRC20)', callback_ `pay_USDT_${plan}` }]);
+      if (process.env.USDC_WALLET_ADDRESS) buttons.push([{ text: '🔵 USDC (TRC20)', callback_ `pay_USDC_${plan}` }]);
       if (buttons.length === 0) {
         await bot.editMessageText('❌ Payment is temporarily unavailable.', { chat_id: chatId, message_id: callbackQuery.message.message_id });
         return;
       }
-      buttons.push([{ text: '🔙 Back', callback_data: 'back_to_start' }]);
+      buttons.push([{ text: '🔙 Back', callback_ 'back_to_start' }]);
       await bot.editMessageText(
         `💳 Choose currency for <b>${plan === '1month' ? '1 Month' : '3 Months'}</b>:`,
         {
@@ -141,7 +140,7 @@ bot.on('callback_query', async (callbackQuery) => {
       await bot.sendPhoto(chatId, qrBuffer, {
         caption,
         parse_mode: 'HTML',
-        reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'back_to_start' }]] }
+        reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_ 'back_to_start' }]] }
       });
       await User.findOneAndUpdate({ userId: chatId }, { $set: { pendingPayment: { plan, amount, currency } } });
     } else if (data === 'my_subscription') {
@@ -149,7 +148,7 @@ bot.on('callback_query', async (callbackQuery) => {
       if (!user || user.subscription === 'none') {
         await bot.sendMessage(chatId,
           `📊 <b>Your Subscription Status</b>\n❌ No active subscription\nChoose a plan to get VIP access!`,
-          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🎫 View Plans', callback_data: 'back_to_start' }]] } }
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🎫 View Plans', callback_ 'back_to_start' }]] } }
         );
       } else {
         const now = new Date();
@@ -159,7 +158,7 @@ bot.on('callback_query', async (callbackQuery) => {
           `✅ Plan: <b>${user.subscription.toUpperCase()}</b>\n` +
           `⏰ Expires in: <b>${days} days</b>\n` +
           `📅 Expiry: <b>${user.expiresAt.toLocaleDateString()}</b>`,
-          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔄 Renew', callback_data: 'back_to_start' }]] } }
+          { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔄 Renew', callback_ 'back_to_start' }]] } }
         );
       }
     } else if (data === 'back_to_start') {
@@ -174,7 +173,7 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 });
 
-// 🔍 Автоматическая проверка TON
+// 🔍 Автоматическая проверка TON через TON Center (публичный API)
 async function verifyTONTransaction(txHash, expectedAmount, walletAddress) {
   try {
     const url = `https://toncenter.com/api/v2/getTransaction?transaction_id=${txHash}`;
