@@ -1,12 +1,39 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FXWave Gold Gateway</title>
   <link rel="stylesheet" href="style.css" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/feather-icons"></script>
+  <style>
+    .subscription-card {
+      transition: transform 0.3s ease;
+    }
+    .subscription-card:hover {
+      transform: translateY(-5px);
+    }
+    .ribbon {
+      position: absolute;
+      top: 10px;
+      right: -30px;
+      transform: rotate(45deg);
+      background: #f59e0b;
+      color: white;
+      padding: 5px 30px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+    .qr-container {
+      display: none;
+      text-align: center;
+      margin-top: 16px;
+    }
+    .qr-container.active {
+      display: block;
+    }
+  </style>
 </head>
 <body class="bg-gray-900 text-white min-h-screen">
   <main class="container mx-auto px-4 py-10">
@@ -19,50 +46,99 @@
           <p class="text-xl text-gray-300">Subscribe to unlock premium trading signals and analysis</p>
         </div>
 
+        <!-- Планы -->
         <div class="grid md:grid-cols-2 gap-6 mb-8">
           <div class="subscription-card bg-gradient-to-br from-gray-800 to-gray-900 border border-yellow-500/30 rounded-xl p-6 relative overflow-hidden">
             <div class="ribbon">1 MONTH</div>
             <h3 class="text-2xl font-bold mb-2">Basic Access</h3>
-            <p class="text-gray-400 mb-4">Full access to VIP signals for 30 days</p>
-            <div class="price text-4xl font-bold text-yellow-400 mb-6">24 USDT</div>
-            <button onclick="selectPlan('1month')" class="w-full bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-3 px-4 rounded-lg transition duration-200">
-              Subscribe Now
-            </button>
+            <p class="text-gray-400 mb-2">Full access for 30 days</p>
+            <div class="flex space-x-4 mt-2">
+              <span class="text-yellow-400 font-bold">24 USDT</span>
+              <span class="text-green-400 font-bold">11 TON</span>
+            </div>
           </div>
-
           <div class="subscription-card bg-gradient-to-br from-gray-800 to-gray-900 border border-yellow-500/30 rounded-xl p-6 relative overflow-hidden">
             <div class="ribbon" style="background: #10b981;">3 MONTHS</div>
             <h3 class="text-2xl font-bold mb-2">Premium Access</h3>
-            <p class="text-gray-400 mb-4">Extended access with 15% discount</p>
-            <div class="price text-4xl font-bold text-yellow-400 mb-6">55 USDT</div>
-            <button onclick="selectPlan('3months')" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-lg transition duration-200">
-              Subscribe Now
-            </button>
+            <p class="text-gray-400 mb-2">Save 15% with extended access</p>
+            <div class="flex space-x-4 mt-2">
+              <span class="text-yellow-400 font-bold">55 USDT</span>
+              <span class="text-green-400 font-bold">25 TON</span>
+            </div>
           </div>
         </div>
 
+        <!-- Выбор валюты -->
+        <div class="bg-gray-900 bg-opacity-70 p-6 rounded-xl mb-6">
+          <h3 class="text-xl font-bold mb-4">1. Choose Currency</h3>
+          <div class="flex space-x-4">
+            <button onclick="selectCurrency('USDT')" id="btn-usdt" class="px-4 py-2 bg-yellow-600 rounded-lg">USDT (TRC20)</button>
+            <button onclick="selectCurrency('TON')" id="btn-ton" class="px-4 py-2 bg-green-600 rounded-lg">TON</button>
+          </div>
+        </div>
+
+        <!-- Инструкции и QR -->
         <div class="bg-gray-900 bg-opacity-70 p-6 rounded-xl">
-          <h3 class="text-xl font-bold mb-4">Payment Instructions</h3>
-          <div class="flex items-center space-x-4 mb-6">
-            <i data-feather="alert-circle" class="text-yellow-400"></i>
-            <p class="text-gray-300">Send exact amount in USDT (TRC20) to:</p>
+          <h3 class="text-xl font-bold mb-4">2. Payment Instructions</h3>
+
+          <!-- USDT блок -->
+          <div id="usdt-block" class="qr-container active">
+            <p class="text-gray-300 mb-2">Send exact amount in <b>USDT (TRC20)</b> to:</p>
+            <div class="wallet-address bg-gray-800 p-4 rounded-lg flex items-center justify-between mb-4">
+              <code id="usdt-wallet" class="text-yellow-400 break-all">TVRGFPKVs1nN3fUXBTQfu5syTcmYGgADre</code>
+              <button onclick="copyText('usdt-wallet')" class="copy-btn bg-gray-700 hover:bg-gray-600 p-2 rounded">
+                <i data-feather="copy"></i>
+              </button>
+            </div>
+            <img id="qr-usdt" src="/qr?currency=USDT" alt="USDT QR" class="mx-auto mb-4 rounded-lg border border-gray-700" width="200" />
+            <p class="text-gray-400 text-sm">
+              After payment, forward the transaction hash to
+              <a href="https://t.me/fxgoldwave_bot" class="text-yellow-400 underline">@fxgoldwave_bot</a>
+            </p>
           </div>
-          <div class="wallet-address bg-gray-800 p-4 rounded-lg flex items-center justify-between mb-4">
-            <code id="walletAddress" class="text-yellow-400">TVRGFPKVs1nN3fUXBTQfu5syTcmYGgADre</code>
-            <button onclick="copyWalletAddress()" class="copy-btn bg-gray-700 hover:bg-gray-600 p-2 rounded">
-              <i data-feather="copy"></i>
-            </button>
+
+          <!-- TON блок -->
+          <div id="ton-block" class="qr-container">
+            <p class="text-gray-300 mb-2">Send exact amount in <b>TON</b> to:</p>
+            <div class="wallet-address bg-gray-800 p-4 rounded-lg flex items-center justify-between mb-4">
+              <code id="ton-wallet" class="text-green-400 break-all">UQDpCH-pGSzp3zEkpJY1Wc46gaorw9K-7T9FX7gHTrthMWMj</code>
+              <button onclick="copyText('ton-wallet')" class="copy-btn bg-gray-700 hover:bg-gray-600 p-2 rounded">
+                <i data-feather="copy"></i>
+              </button>
+            </div>
+            <p class="text-xs text-gray-500 italic mb-2">Данный адрес предназначен только для системы TON</p>
+            <img id="qr-ton" src="/qr?currency=TON" alt="TON QR" class="mx-auto mb-4 rounded-lg border border-gray-700" width="200" />
+            <p class="text-gray-400 text-sm">
+              After payment, forward the transaction hash to
+              <a href="https://t.me/fxgoldwave_bot" class="text-yellow-400 underline">@fxgoldwave_bot</a>
+            </p>
           </div>
-          <p class="text-gray-400 text-sm">
-            After payment, forward the transaction hash to
-            <a href="https://t.me/fxgoldwave_bot" class="text-yellow-400 underline">@fxgoldwave_bot</a>
-          </p>
         </div>
       </div>
     </div>
   </main>
 
-  <script src="script.js"></script>
-  <script>feather.replace();</script>
+  <script>
+    feather.replace();
+
+    let currentCurrency = 'USDT';
+
+    function selectCurrency(currency) {
+      currentCurrency = currency;
+      document.getElementById('usdt-block').classList.toggle('active', currency === 'USDT');
+      document.getElementById('ton-block').classList.toggle('active', currency === 'TON');
+      document.getElementById('btn-usdt').classList.toggle('bg-yellow-500', currency === 'USDT');
+      document.getElementById('btn-usdt').classList.toggle('bg-yellow-600', currency !== 'USDT');
+      document.getElementById('btn-ton').classList.toggle('bg-green-500', currency === 'TON');
+      document.getElementById('btn-ton').classList.toggle('bg-green-600', currency !== 'TON');
+    }
+
+    function copyText(id) {
+      const text = document.getElementById(id).textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        alert('Copied to clipboard!');
+      });
+    }
+  </script>
 </body>
 </html>
