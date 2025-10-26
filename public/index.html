@@ -20,7 +20,6 @@
           </h1>
           <p class="text-gray-300">Choose plan and currency to subscribe</p>
         </div>
-        <!-- Выбор плана -->
         <div class="mb-6">
           <h3 class="text-lg font-bold mb-3">1. Select Plan</h3>
           <div class="flex space-x-4">
@@ -28,34 +27,23 @@
             <button onclick="selectPlan('3months')" id="btn-3m" class="px-4 py-2 bg-gray-700 rounded">3 Months</button>
           </div>
         </div>
-        <!-- Выбор валюты -->
         <div class="mb-6">
           <h3 class="text-lg font-bold mb-3">2. Choose Currency</h3>
           <div class="flex space-x-4">
             <button onclick="selectCurrency('USDT')" id="btn-usdt" class="px-4 py-2 bg-yellow-600 rounded">USDT (TRC20)</button>
-            <button onclick="selectCurrency('USDC')" id="btn-usdc" class="px-4 py-2 bg-blue-600 rounded">USDC (TRC20)</button>
             <button onclick="selectCurrency('TON')" id="btn-ton" class="px-4 py-2 bg-green-600 rounded">TON</button>
           </div>
         </div>
-        <!-- USDT -->
         <div id="usdt-block" class="qr-container active">
           <h4 class="font-bold mb-2">Send to (USDT TRC20):</h4>
           <code id="usdt-addr" class="block bg-gray-800 p-2 rounded mb-2 break-all">TVRGFPKVs1nN3fUXBTQfu5syTcmYGgADre</code>
           <img id="qr-usdt" src="/qr?currency=USDT&plan=1month" alt="USDT QR" class="mx-auto mb-2" width="200" />
           <button onclick="copy('usdt-addr')" class="text-sm text-yellow-400">Copy address</button>
         </div>
-        <!-- USDC -->
-        <div id="usdc-block" class="qr-container">
-          <h4 class="font-bold mb-2">Send to (USDC TRC20):</h4>
-          <code id="usdc-addr" class="block bg-gray-800 p-2 rounded mb-2 break-all">TVRGFPKVs1nN3fUXBTQfu5syTcmYGgADre</code>
-          <img id="qr-usdc" src="/qr?currency=USDC&plan=1month" alt="USDC QR" class="mx-auto mb-2" width="200" />
-          <button onclick="copy('usdc-addr')" class="text-sm text-blue-400">Copy address</button>
-        </div>
-        <!-- TON -->
         <div id="ton-block" class="qr-container">
           <h4 class="font-bold mb-2">Send to (TON):</h4>
           <code id="ton-addr" class="block bg-gray-800 p-2 rounded mb-2 break-all">UQDpCH-pGSzp3zEkpJY1Wc46gaorw9K-7T9FX7gHTrthMWMj</code>
-          <p class="text-xs italic text-gray-500 mb-2">Данный адрес предназначен только для системы TON</p>
+          <p class="text-xs italic text-gray-500 mb-2">Only for TON network</p>
           <img id="qr-ton" src="/qr?currency=TON&plan=1month" alt="TON QR" class="mx-auto mb-2" width="200" />
           <button onclick="copy('ton-addr')" class="text-sm text-green-400">Copy address</button>
         </div>
@@ -80,20 +68,15 @@
     function selectCurrency(currency) {
       currentCurrency = currency;
       document.getElementById('usdt-block').classList.toggle('active', currency === 'USDT');
-      document.getElementById('usdc-block').classList.toggle('active', currency === 'USDC');
       document.getElementById('ton-block').classList.toggle('active', currency === 'TON');
-
       document.getElementById('btn-usdt').classList.toggle('bg-yellow-500', currency === 'USDT');
-      document.getElementById('btn-usdc').classList.toggle('bg-blue-500', currency === 'USDC');
       document.getElementById('btn-ton').classList.toggle('bg-green-500', currency === 'TON');
-
       updateQR();
     }
 
     function updateQR() {
       const t = Date.now();
       document.getElementById('qr-usdt').src = `/qr?currency=USDT&plan=${currentPlan}&t=${t}`;
-      document.getElementById('qr-usdc').src = `/qr?currency=USDC&plan=${currentPlan}&t=${t}`;
       document.getElementById('qr-ton').src = `/qr?currency=TON&plan=${currentPlan}&t=${t}`;
     }
 
