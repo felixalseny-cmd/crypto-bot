@@ -160,7 +160,7 @@ userSchema.index({ expiresAt: 1, subscription: 1 });
 
 const User = mongoose.model('User', userSchema);
 
-// 🤖 TELEGRAM BOT - ИСПОЛЬЗУЕМ POLLING ДЛЯ FLY.IO
+// 🤖 TELEGRAM BOT - ИСПОЛЬЗУЕМ WEBHOOK ВМЕСТО POLLING
 const bot = new TelegramBot(process.env.BOT_TOKEN);
 
 // 🛠️ УТИЛИТЫ
@@ -227,7 +227,7 @@ bot.onText(/\/start/, async (msg) => {
       [{ text: '🔍 MY SUBSCRIPTION', callback_data: 'my_subscription' }],
       [
         { text: '📞 SUPPORT', url: 'https://t.me/fxfeelgood' },
-        { text: '📄 TERMS', url: `${process.env.FLY_APP_NAME ? `https://${process.env.FLY_APP_NAME}.fly.dev` : 'http://localhost:10000'}/offer` }
+        { text: '📄 TERMS', url: `${process.env.RENDER_EXTERNAL_URL || 'http://localhost:10000'}/offer` }
       ]
     ];
 
@@ -680,7 +680,7 @@ bot.onText(/\/testchannel/, async (msg) => {
   }
 });
 
-// 🌐 ВЕБ СЕРВЕР
+// 🌐 ВЕБ СЕРВЕР И WEBHOOK
 app.use(express.static('public'));
 app.use(express.json());
 
@@ -701,7 +701,7 @@ app.get('/health', async (req, res) => {
     timestamp: new Date().toISOString(),
     services: {
       database: dbStatus,
-      bot: 'polling_mode',
+      bot: 'webhook_mode',
       web: 'running'
     },
     system: {
@@ -766,6 +766,20 @@ app.get('/qr', async (req, res) => {
   }
 });
 
+// 🔁 KEEP-ALIVE
+if (process.env.RENDER_EXTERNAL_URL) {
+  setInterval(async () => {
+    try {
+      const response = await fetch(`${process.env.RENDER_EXTERNAL_URL}/health`);
+      if (response.ok) {
+        console.log('✅ KEEP-ALIVE: Successful');
+      }
+    } catch (error) {
+      console.warn('⚠️ KEEP-ALIVE: Failed -', error.message);
+    }
+  }, CONFIG.KEEP_ALIVE_INTERVAL);
+}
+
 // 🗑️ ОЧИСТКА ПРОСРОЧЕННЫХ ПОДПИСОК
 setInterval(async () => {
   try {
@@ -797,35 +811,52 @@ setInterval(async () => {
       }
     }
 
-    console.log(`✅ CLEANUP: Completed processing ${expryptedUsers.length} users`);
+    console.log(`✅ CLEANUP: Completed processing ${expiredUsers.length} users`);
 
   } catch (error) {
     console.error('❌ CLEANUP ERROR:', error);
   }
 }, CONFIG.CLEANUP_INTERVAL);
 
-// ▶️ ЗАПУСК СЕРВЕРА
+// ▶️ ЗАПУСК СЕРВЕРА С WEBHOOK
 const startServer = async () => {
   try {
     await connectDB();
     
-    // Используем polling для Fly.io
-    console.log('🔧 Starting bot with polling...');
-    bot.startPolling();
+    // Настройка webhook для Render.com
+    if (process.env.RENDER_EXTERNAL_URL) {
+      const webhookPath = `/webhook/${process.env.BOT_TOKEN}`;
+      const webhookUrl = process.env.RENDER_EXTERNAL_URL + webhookPath;
+      
+      console.log(`🌐 Setting webhook to: ${webhookUrl}`);
+      
+      await bot.setWebHook(webhookUrl);
+      console.log('✅ Webhook set successfully');
+      
+      // Webhook endpoint
+      app.post(webhookPath, (req, res) => {
+        bot.processUpdate(req.body);
+        res.sendStatus(200);
+      });
+    } else {
+      // Локальная разработка - используем polling
+      console.log('🔧 Local development - using polling');
+      bot.startPolling();
+    }
     
-    // КРИТИЧЕСКИ ВАЖНО: слушаем на 0.0.0.0 для Fly.io
-    app.listen(PORT, '0.0.0.0', () => {
+    app.listen(PORT, () => {
       console.log('🎉 BOT STARTED SUCCESSFULLY!');
-      console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
+      console.log(`🚀 Server running on port ${PORT}`);
       console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`🔗 External URL: ${process.env.RENDER_EXTERNAL_URL || 'Not set'}`);
       console.log(`💾 Database: ${mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'}`);
-      console.log(`🤖 Bot mode: Polling`);
+      console.log(`🤖 Bot mode: ${process.env.RENDER_EXTERNAL_URL ? 'Webhook' : 'Polling'}`);
       console.log('='.repeat(50));
       
       logger('SERVER_STARTED', 'system', { 
         port: PORT, 
         environment: process.env.NODE_ENV || 'development',
-        mode: 'polling'
+        mode: process.env.RENDER_EXTERNAL_URL ? 'webhook' : 'polling'
       });
     });
   } catch (error) {
@@ -853,7 +884,18 @@ process.on('uncaughtException', (error) => {
 process.on('SIGTERM', async () => {
   console.log('🔄 Received SIGTERM, shutting down gracefully...');
   
-  bot.stopPolling();
+  // Удаляем webhook при завершении
+  if (process.env.RENDER_EXTERNAL_URL) {
+    try {
+      await bot.deleteWebHook();
+      console.log('✅ Webhook deleted');
+    } catch (error) {
+      console.error('❌ Error deleting webhook:', error);
+    }
+  } else {
+    bot.stopPolling();
+  }
+  
   await mongoose.connection.close();
   console.log('✅ Graceful shutdown completed');
   process.exit(0);
@@ -862,7 +904,18 @@ process.on('SIGTERM', async () => {
 process.on('SIGINT', async () => {
   console.log('🔄 Received SIGINT, shutting down gracefully...');
   
-  bot.stopPolling();
+  // Удаляем webhook при завершении
+  if (process.env.RENDER_EXTERNAL_URL) {
+    try {
+      await bot.deleteWebHook();
+      console.log('✅ Webhook deleted');
+    } catch (error) {
+      console.error('❌ Error deleting webhook:', error);
+    }
+  } else {
+    bot.stopPolling();
+  }
+  
   await mongoose.connection.close();
   console.log('✅ Graceful shutdown completed');
   process.exit(0);
